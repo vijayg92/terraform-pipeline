@@ -4,19 +4,19 @@
 
 variable "aws_access_key" {}
 variable "aws_secret_key" {}
-#variable "aws_region" {}
+variable "aws_region" {}
 variable "private_key_path" {}
 variable "key_name" {
   default = "DevOpsUser"
 }
 variable "cidr_address_space" {
-  default = "172.21.0.0/16"
+  default = "10.1.0.0/16"
 }
 variable "subnet1_address_space" {
-  default = "172.21.1.0/24"
+  default = "10.1.1.0/24"
 }
 variable "subnet2_address_space" {
-  default = "172.21.2.0/24"
+  default = "10.1.2.0/24"
 }
 
 ###################################################################################################################
@@ -26,15 +26,14 @@ variable "subnet2_address_space" {
 provider "aws" {
     access_key = "${var.aws_access_key}"
     secret_key = "${var.aws_secret_key}"
-    #region = "${var.aws_region}"
-    region = "ap-south-1"
+    region = "${var.aws_region}"
 }
 
 ###################################################################################################################
 ##  Data
 ###################################################################################################################
 
-data "aws_availibility_zones" "available" {}
+data "aws_availability_zones" "available" {}
 
 ###################################################################################################################
 ##  Resources
@@ -43,7 +42,7 @@ data "aws_availibility_zones" "available" {}
 ## Networking ##
 resource "aws_vpc" "vpc" {
     cidr_block = "${var.cidr_address_space}"
-    enable_dns_hostname = "true"
+    enable_dns_hostnames = "true"
 }
 
 resource "aws_internet_gateway" "igw" {
@@ -53,15 +52,15 @@ resource "aws_internet_gateway" "igw" {
 resource "aws_subnet" "subnet1" {
     cidr_block = "${var.subnet1_address_space}"
     vpc_id =  "${aws_vpc.vpc.id}"
-    map_public_ip_on_lunch = "true"
-    avalibility_zone = "${data.aws_availibility_zones.available.names[0]}"
+    map_public_ip_on_launch = "true"
+    availability_zone = "${data.aws_availability_zones.available.names[0]}"
 }
 
 resource "aws_subnet" "subnet2" {
     cidr_block = "${var.subnet2_address_space}"
     vpc_id =  "${aws_vpc.vpc.id}"
-    map_public_ip_on_lunch = "true"
-    avalibility_zone = "${data.aws_availibility_zones.available.names[1]}"
+    map_public_ip_on_launch = "true"
+    availability_zone = "${data.aws_availability_zones.available.names[1]}"
 }
 
 ## Routing ##
@@ -95,7 +94,7 @@ resource "aws_security_group" "nginx-sg" {
         from_port = 22
         to_port = 22
         protocol = "tcp"
-        cidr_blocks = ["0.0.0.0/0"]
+        cidr_blocks = ["202.142.121.177/32"]
     }
 
     ingress{
@@ -113,13 +112,50 @@ resource "aws_security_group" "nginx-sg" {
     }
 }
 
-## Instance ##
-resource "aws_instance" "nginx" {
+resource "aws_security_group" "elb-sg" {
+
+    name = "elb-sg"
+    vpc_id = "${aws_vpc.vpc.id}"
+
+    ingress{
+        from_port = 80
+        to_port = 80
+        protocol = "tcp"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+
+    egress {
+        from_port = 0
+        to_port = 0
+        protocol = "-1"
+        cidr_blocks = ["0.0.0.0/0"]
+    }
+}
+
+## Load Balancer ##
+resource "aws_elb" "nginx-elb" {
+    name = "nginx-elb"
+
+    subnets = ["${aws_subnet.subnet1.id}", "${aws_subnet.subnet2.id}"]
+    security_groups = ["${aws_security_group.elb-sg.id}"]
+    instances = ["${aws_instance.nginx1.id}", "${aws_instance.nginx2.id}"]
+
+    listener {
+        instance_port = 80
+        instance_protocol = "http"
+        lb_port = 80
+        lb_protocol = "http"
+    }
+}
+
+## Instances ##
+resource "aws_instance" "nginx1" {
 
     ami = "ami-7c87d913"
     instance_type = "t2.micro"
     subnet_id = "${aws_subnet.subnet1.id}"
-    vpc_security_group = "[${aws_security_group.nginx-sg.id}]"
+    availability_zone = "${data.aws_availability_zones.available.names[0]}"
+    vpc_security_group_ids = ["${aws_security_group.nginx-sg.id}"]
     key_name = "${var.key_name}"
 
     connection {
@@ -130,7 +166,30 @@ resource "aws_instance" "nginx" {
     provisioner "remote-exec" {
       inline = [
       "sudo yum install -y nginx",
-      "echo '<html><head><title>VJ</title></head><body><Hello World></body></html>'",
+      "sudo service nginx enable",
+      "sudo service nginx start"
+      ]
+    }
+}
+
+resource "aws_instance" "nginx2" {
+
+    ami = "ami-7c87d913"
+    instance_type = "t2.micro"
+    subnet_id = "${aws_subnet.subnet2.id}"
+    availability_zone = "${data.aws_availability_zones.available.names[1]}"
+    vpc_security_group_ids = ["${aws_security_group.nginx-sg.id}"]
+    key_name = "${var.key_name}"
+
+    connection {
+      user = "ec2-user"
+      private_key = "${file(var.private_key_path)}"
+    }
+
+    provisioner "remote-exec" {
+      inline = [
+      "sudo yum install -y nginx",
+      "sudo service nginx enable",
       "sudo service nginx start"
       ]
     }
@@ -141,5 +200,5 @@ resource "aws_instance" "nginx" {
 ###################################################################################################################
 
 output "aws_instance_public_dns" {
-    value = "${aws_instance.nginx.public_dns}"
+    value = "${aws_elb.nginx-elb.dns_name}"
 }

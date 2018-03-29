@@ -7,16 +7,16 @@ variable "aws_secret_key" {}
 variable "aws_region" {}
 variable "private_key_path" {}
 variable "key_name" {
-  default = "DevOpsUser"
+  default = "DevOps"
 }
 variable "cidr_address_space" {
-  default = "172.21.0.0/16"
+  default = "172.15.0.0/16"
 }
 variable "subnet1_address_space" {
-  default = "172.21.1.0/24"
+  default = "172.15.1.0/24"
 }
 variable "subnet2_address_space" {
-  default = "172.21.2.0/24"
+  default = "172.15.2.0/24"
 }
 
 ###################################################################################################################
@@ -84,14 +84,21 @@ resource "aws_route_table_association" "rt-subnet2" {
 }
 
 ## Security Group ##
-resource "aws_security_group" "nginx-sg" {
+resource "aws_security_group" "haproxy-sg" {
 
-    name = "nginx-sg"
+    name = "haproxy-sg"
     vpc_id = "${aws_vpc.vpc.id}"
 
     ingress{
         from_port = 22
         to_port = 22
+        protocol = "tcp"
+        cidr_blocks = ["202.142.121.177/32"]
+    }
+
+    ingress{
+        from_port = 443
+        to_port = 443
         protocol = "tcp"
         cidr_blocks = ["0.0.0.0/0"]
     }
@@ -116,12 +123,12 @@ resource "aws_eip" "haproxy-eip" {
 }
 
 ## Instance ##
-resource "aws_instance" "nginx" {
+resource "aws_instance" "haproxy" {
 
     ami = "ami-7c87d913"
-    instance_type = "t2.micro"
+    instance_type = "t2.medium"
     subnet_id = "${aws_subnet.subnet1.id}"
-    vpc_security_group_ids = ["${aws_security_group.nginx-sg.id}"]
+    vpc_security_group_ids = ["${aws_security_group.haproxy-sg.id}"]
     key_name = "${var.key_name}"
 
     connection {
@@ -132,19 +139,34 @@ resource "aws_instance" "nginx" {
     provisioner "remote-exec" {
       inline = [
       "sudo yum install -y haproxy",
+      "sudo mkdir /run/haproxy",
+      "sudo chown -R haproxy. /run/haproxy"
+      ]
+    }
+
+    provisioner "file" {
+      source      = "conf"
+      destination = "/etc/haproxy"
+    }
+
+    provisioner "remote-exec" {
+      inline = [
+      "sudo chown -R haproxy. /etc/haproxy",
+      "sudo service haproxy enable",
       "sudo service haproxy start"
       ]
     }
 }
 
 resource "aws_eip_association" "haproxy_eip" {
-  instance_id   = "${aws_instance.nginx.id}"
+  instance_id   = "${aws_instance.haproxy.id}"
   allocation_id = "${aws_eip.haproxy-eip.id}"
 }
+
 ###################################################################################################################
 ##  Output
 ###################################################################################################################
 
 output "aws_instance_public_dns" {
-    value = "${aws_instance.nginx.public_dns}"
+    value = "${aws_instance.haproxy.public_dns}"
 }
